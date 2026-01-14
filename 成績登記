@@ -1,0 +1,79 @@
+import streamlit as st
+import easyocr
+import numpy as np
+import pandas as pd
+from PIL import Image
+
+# 設定網頁標題
+st.set_page_config(page_title="歷史老師成績助手", layout="centered")
+
+# 初始化 OCR 引擎 (增加快取避免重複載入)
+@st.cache_resource
+def load_ocr():
+    # 支援繁體中文與英文/數字
+    return easyocr.Reader(['ch_tra', 'en'])
+
+reader = load_ocr()
+
+st.title("🎓 歷史老師成績登記助手")
+st.markdown("---")
+
+# 選擇輸入方式
+input_method = st.radio("選擇方式：", ["📷 直接拍照", "🖼️ 從相冊選取多圖"], horizontal=True)
+
+uploaded_files = []
+if input_method == "📷 直接拍照":
+    img = st.camera_input("請對準成績位置拍照")
+    if img:
+        uploaded_files.append(img)
+else:
+    files = st.file_uploader("可一次選取多張照片", accept_multiple_files=True, type=['jpg', 'png', 'jpeg'])
+    if files:
+        uploaded_files = files
+
+# 暫存辨識資料
+if uploaded_files:
+    all_results = []
+    
+    with st.status("正在辨識中...", expanded=True) as status:
+        for file in uploaded_files:
+            image = Image.open(file)
+            img_np = np.array(image)
+            
+            # OCR 辨識
+            results = reader.readtext(img_np)
+            
+            # 提取數字邏輯：過濾出所有純數字
+            nums = []
+            for (bbox, text, prob) in results:
+                # 去除空白並檢查是否為數字
+                clean_text = text.replace(" ", "")
+                if clean_text.isdigit():
+                    nums.append(int(clean_text))
+            
+            # 判斷：假設一張照片中，小的數字是座號，大的數字是分數
+            if len(nums) >= 2:
+                nums.sort() # 排序後，最小值通常是座號，最大值是分數
+                all_results.append({"座號": nums[0], "分數": nums[-1]})
+            else:
+                st.warning(f"檔案 {file.name} 辨識數字不足(需座號與分數)")
+        
+        status.update(label="辨識完成！", state="complete", expanded=False)
+
+    if all_results:
+        df = pd.DataFrame(all_results)
+        # 依座號排序
+        df = df.sort_values(by="座號").reset_index(drop=True)
+        
+        st.subheader("📊 登記表 (可點擊方格直接修正)")
+        # 顯示可編輯表格
+        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        
+        # 下載按鈕
+        csv = edited_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 下載 Excel (CSV) 檔",
+            data=csv,
+            file_name='學生個人成績單.csv',
+            mime='text/csv',
+        )
